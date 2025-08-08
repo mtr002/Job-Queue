@@ -1,7 +1,7 @@
 package main
 
-import "fmt"
+import "github.com/mtr002/Job-Queue/internal/api"
 
 func main() {
-	fmt.Println("Hello, World!")
+	api.StartServer("8080")
 }

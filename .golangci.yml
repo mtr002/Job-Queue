@@ -1,0 +1,39 @@
+run:
+  timeout: 5m
+  go: "1.23"
+
+linters-settings:
+  gci:
+    sections:
+      - standard
+      - default
+      - prefix(github.com/mtr002/Job-Queue)
+  gofumpt:
+    extra-rules: true
+  govet:
+    enable-all: true
+  staticcheck:
+    checks: ["all"]
+
+linters:
+  enable:
+    - gofumpt
+    - goimports
+    - gci
+    - govet
+    - staticcheck
+    - errcheck
+    - gosimple
+    - ineffassign
+    - unused
+    - misspell
+    - revive
+    - gosec
+    - unconvert
+    - unparam
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gosec

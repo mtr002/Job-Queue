@@ -1,0 +1,11 @@
+module(
+    name = "job-queue",
+    version = "0.1.0",
+)
+
+bazel_dep(name = "rules_go", version = "0.47.0")
+bazel_dep(name = "gazelle", version = "0.36.0")
+bazel_dep(name = "bazel_skylib", version = "1.7.1")
+
+go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
+go_deps.from_file(go_mod = "//:go.mod")

@@ -1,4 +1,4 @@
-APP_NAME=jobqueue
+APP_NAME=Job-Queue
 BIN_DIR=bin
 MAIN_PATH=./cmd/server
 
@@ -47,24 +47,19 @@ lint: ## Lint Go code
 		echo "golangci-lint not found. Install with: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"; \
 	fi
 
-dev: ## Run in development mode with hot reload (requires air)
-	@if command -v air >/dev/null 2>&1; then \
-		air; \
-	else \
-		echo "air not found. Install with: go install github.com/cosmtrek/air@latest"; \
-		echo "Falling back to regular run..."; \
-		go run $(MAIN_PATH); \
-	fi
-
-docker-build: ## Build Docker image
-	docker build -t $(APP_NAME):$(VERSION) .
-
-docker-run: ## Run Docker container
-	docker run -p 8080:8080 $(APP_NAME):$(VERSION)
-
 install-tools: ## Install development tools
 	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 	go install github.com/cosmtrek/air@latest
+
+
+bazel-build: ## Build with Bazel
+	bazel build //...
+
+bazel-test: ## Test with Bazel
+	bazel test //...
+
+bazel-run: ## Run server with Bazel
+	bazel run //cmd/server:server
 
 setup: tidy install-tools ## Setup development environment
 	@echo "Development environment setup complete!"

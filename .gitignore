@@ -6,24 +6,19 @@
 *.dylib
 bin/
 
-# Test binary, built with `go test -c`
 *.test
 
-# Output of the go coverage tool
 *.out
 coverage.html
 
-# Go workspace file
 go.work
 
-# IDE files
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# OS generated files
 .DS_Store
 .DS_Store?
 ._*
@@ -47,3 +42,8 @@ temp/
 
 # Air live reload
 tmp/
+
+# Bazel build artifacts and symlinks
+bazel-*
+/bazel-out/
+.bazel/
