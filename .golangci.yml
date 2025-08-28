@@ -9,7 +9,7 @@ linters-settings:
       - default
       - prefix(github.com/mtr002/Job-Queue)
   gofumpt:
-    extra-rules: true
+    extra-rules: false
   govet:
     enable-all: true
   staticcheck:
