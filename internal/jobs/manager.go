@@ -3,134 +3,113 @@ package jobs
 import (
 	"fmt"
 	"log"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mtr002/Job-Queue/internal/interfaces"
 )
 
-// Manager handles job storage and queueing
+// Manager handles job storage and queueing with database persistence
 type Manager struct {
-	jobs     map[string]*Job // In-memory storage for jobs
-	jobQueue chan *Job       // Channel-based job queue
-	mu       sync.RWMutex
-	workers  int // Number of worker goroutines
+	store             interfaces.JobStore
+	defaultMaxRetries int
 }
 
-// NewManager creates a new job manager
-func NewManager(workers, queueSize int) *Manager {
+// NewManager creates a new job manager with database persistence
+func NewManager(store interfaces.JobStore, defaultMaxRetries int) *Manager {
+	if defaultMaxRetries <= 0 {
+		defaultMaxRetries = 3 // Default to 3 retries
+	}
+
 	return &Manager{
-		jobs:     make(map[string]*Job),
-		jobQueue: make(chan *Job, queueSize),
-		workers:  workers,
+		store:             store,
+		defaultMaxRetries: defaultMaxRetries,
 	}
 }
 
-// SubmitJob creates a new job and adds it to the queue
-func (m *Manager) SubmitJob(jobType, payload string) (*Job, error) {
+// SubmitJob creates a new job and persists it to the database
+func (m *Manager) SubmitJob(jobType, payload string) (*interfaces.Job, error) {
 	if jobType == "" {
 		return nil, fmt.Errorf("job type cannot be empty")
 	}
 
-	job := &Job{
-		ID:        uuid.New().String(),
-		Type:      jobType,
-		Payload:   payload,
-		Status:    StatusPending,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+	job := &interfaces.Job{
+		ID:          uuid.New().String(),
+		Type:        jobType,
+		Payload:     payload,
+		Status:      interfaces.StatusPending,
+		Attempts:    0,
+		MaxAttempts: m.defaultMaxRetries,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
 	}
 
-	m.mu.Lock()
-	m.jobs[job.ID] = job
-	m.mu.Unlock()
-
-	// Send job to queue (non-blocking)
-	select {
-	case m.jobQueue <- job:
-		// Job successfully queued
-	default:
-		// Queue is full, update status to failed
-		if err := m.updateJobStatus(job.ID, StatusFailed, "", "queue is full"); err != nil {
-			log.Printf("Failed to update job status: %v", err)
-		}
-		return job, fmt.Errorf("job queue is full")
+	if err := m.store.CreateJob(job); err != nil {
+		return nil, fmt.Errorf("failed to create job: %w", err)
 	}
 
+	log.Printf("Job %s submitted successfully (type: %s)", job.ID, job.Type)
 	return job, nil
 }
 
-// GetJob retrieves a job by ID
-func (m *Manager) GetJob(id string) (*Job, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	job, exists := m.jobs[id]
-	if !exists {
-		return nil, fmt.Errorf("job with ID %s not found", id)
-	}
-
-	// Return a copy to avoid external modifications
-	jobCopy := *job
-	return &jobCopy, nil
+// GetJob retrieves a job by ID from the database
+func (m *Manager) GetJob(id string) (*interfaces.Job, error) {
+	return m.store.GetJob(id)
 }
 
-// GetAllJobs returns all jobs (useful for debugging/monitoring)
-func (m *Manager) GetAllJobs() []*Job {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	jobs := make([]*Job, 0, len(m.jobs))
-	for _, job := range m.jobs {
-		jobCopy := *job
-		jobs = append(jobs, &jobCopy)
-	}
-	return jobs
+// GetAllJobs returns all jobs from the database
+func (m *Manager) GetAllJobs() ([]*interfaces.Job, error) {
+	return m.store.GetAllJobs()
 }
 
-// GetJobQueue returns the job queue channel (for workers)
-func (m *Manager) GetJobQueue() <-chan *Job {
-	return m.jobQueue
+// GetPendingJob retrieves the next pending job for processing
+func (m *Manager) GetPendingJob() (*interfaces.Job, error) {
+	return m.store.GetPendingJob()
 }
 
-// updateJobStatus updates a job's status, result, and error
-func (m *Manager) updateJobStatus(id string, status JobStatus, result, errorMsg string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	job, exists := m.jobs[id]
-	if !exists {
-		return fmt.Errorf("job with ID %s not found", id)
-	}
-
-	job.Status = status
+// UpdateJobCompleted marks a job as completed with result
+func (m *Manager) UpdateJobCompleted(job *interfaces.Job, result string) error {
+	job.Status = interfaces.StatusCompleted
+	job.Result = result
 	job.UpdatedAt = time.Now()
-	if result != "" {
-		job.Result = result
+
+	if err := m.store.UpdateJob(job); err != nil {
+		return fmt.Errorf("failed to update job as completed: %w", err)
 	}
-	if errorMsg != "" {
-		job.Error = errorMsg
+
+	log.Printf("Job %s completed successfully", job.ID)
+	return nil
+}
+
+// UpdateJobFailed handles job failure and implements retry logic
+func (m *Manager) UpdateJobFailed(job *interfaces.Job, errorMsg string) error {
+	job.Error = errorMsg
+	job.IncrementAttempts()
+	job.UpdatedAt = time.Now()
+
+	if job.CanRetry() {
+		// Job can be retried - set it to retrying status with backoff
+		job.Status = interfaces.StatusRetrying
+		job.SetRetryAfter(1) // 1 second base delay
+
+		log.Printf("Job %s failed (attempt %d/%d), will retry after %v",
+			job.ID, job.Attempts, job.MaxAttempts, job.RetryAfter)
+	} else {
+		// Job has exceeded max retries - mark as permanently failed
+		job.Status = interfaces.StatusPermanentFailed
+		job.RetryAfter = nil
+
+		log.Printf("Job %s permanently failed after %d attempts", job.ID, job.Attempts)
+	}
+
+	if err := m.store.UpdateJob(job); err != nil {
+		return fmt.Errorf("failed to update failed job: %w", err)
 	}
 
 	return nil
 }
 
-// UpdateJobProcessing marks a job as processing
-func (m *Manager) UpdateJobProcessing(id string) error {
-	return m.updateJobStatus(id, StatusProcessing, "", "")
-}
-
-// UpdateJobCompleted marks a job as completed with result
-func (m *Manager) UpdateJobCompleted(id, result string) error {
-	return m.updateJobStatus(id, StatusCompleted, result, "")
-}
-
-// UpdateJobFailed marks a job as failed with error
-func (m *Manager) UpdateJobFailed(id, errorMsg string) error {
-	return m.updateJobStatus(id, StatusFailed, "", errorMsg)
-}
-
-// Close shuts down the job manager
-func (m *Manager) Close() {
-	close(m.jobQueue)
+// DeleteJob removes a job from the database
+func (m *Manager) DeleteJob(id string) error {
+	return m.store.DeleteJob(id)
 }
