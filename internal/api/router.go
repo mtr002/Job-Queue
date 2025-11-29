@@ -125,7 +125,12 @@ func handleGetJob(w http.ResponseWriter, _ *http.Request, jobID string, logger *
 }
 
 func handleListJobs(w http.ResponseWriter, _ *http.Request, logger *log.Logger, manager *jobs.Manager) {
-	jobs := manager.GetAllJobs()
+	jobs, err := manager.GetAllJobs()
+	if err != nil {
+		logger.Printf("Failed to get all jobs: %v", err)
+		http.Error(w, "Failed to retrieve jobs", http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]interface{}{

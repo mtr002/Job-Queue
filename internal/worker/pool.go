@@ -9,33 +9,36 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mtr002/Job-Queue/internal/interfaces"
 	"github.com/mtr002/Job-Queue/internal/jobs"
 )
 
 // JobProcessor defines the interface for processing different job types
 type JobProcessor interface {
-	Process(job *jobs.Job) (string, error)
+	Process(job *interfaces.Job) (string, error)
 }
 
-// Pool represents a worker pool that processes jobs
+// Pool represents a worker pool that processes jobs from database
 type Pool struct {
-	manager     *jobs.Manager
-	processor   JobProcessor
-	ctx         context.Context
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
-	workerCount int
+	manager      *jobs.Manager
+	processor    JobProcessor
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	workerCount  int
+	pollInterval time.Duration // How often to poll for new jobs
 }
 
-// NewPool creates a new worker pool
+// NewPool creates a new worker pool with database polling
 func NewPool(manager *jobs.Manager, processor JobProcessor, workerCount int) *Pool {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Pool{
-		manager:     manager,
-		processor:   processor,
-		workerCount: workerCount,
-		ctx:         ctx,
-		cancel:      cancel,
+		manager:      manager,
+		processor:    processor,
+		workerCount:  workerCount,
+		ctx:          ctx,
+		cancel:       cancel,
+		pollInterval: 1 * time.Second, // Poll every second
 	}
 }
 
@@ -57,51 +60,53 @@ func (p *Pool) Stop() {
 	log.Println("Worker pool stopped")
 }
 
-// worker is the main worker goroutine that processes jobs
+// worker is the main worker goroutine that polls database for jobs
 func (p *Pool) worker(id int) {
 	defer p.wg.Done()
 
 	log.Printf("Worker %d started", id)
+
+	ticker := time.NewTicker(p.pollInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-p.ctx.Done():
 			log.Printf("Worker %d shutting down", id)
 			return
-		case job := <-p.manager.GetJobQueue():
-			if job == nil {
-				// Channel closed
-				log.Printf("Worker %d: job queue closed", id)
-				return
+		case <-ticker.C:
+			// Poll for a pending job
+			job, err := p.manager.GetPendingJob()
+			if err != nil {
+				log.Printf("Worker %d: error getting pending job: %v", id, err)
+				continue
 			}
 
-			p.processJob(id, job)
+			if job != nil {
+				p.processJob(id, job)
+			}
+			// If no job is available, continue polling
 		}
 	}
 }
 
-// processJob handles the processing of a single job
-func (p *Pool) processJob(workerID int, job *jobs.Job) {
-	log.Printf("Worker %d processing job %s (type: %s)", workerID, job.ID, job.Type)
-
-	// Mark job as processing
-	if err := p.manager.UpdateJobProcessing(job.ID); err != nil {
-		log.Printf("Worker %d: failed to update job %s to processing: %v", workerID, job.ID, err)
-		return
-	}
+// processJob handles the processing of a single job with retry logic
+func (p *Pool) processJob(workerID int, job *interfaces.Job) {
+	log.Printf("Worker %d processing job %s (type: %s, attempt: %d/%d)",
+		workerID, job.ID, job.Type, job.Attempts+1, job.MaxAttempts)
 
 	// Process the job
 	result, err := p.processor.Process(job)
 	if err != nil {
 		log.Printf("Worker %d: job %s failed: %v", workerID, job.ID, err)
-		if updateErr := p.manager.UpdateJobFailed(job.ID, err.Error()); updateErr != nil {
-			log.Printf("Worker %d: failed to update job %s to failed: %v", workerID, job.ID, updateErr)
+		if updateErr := p.manager.UpdateJobFailed(job, err.Error()); updateErr != nil {
+			log.Printf("Worker %d: failed to update failed job %s: %v", workerID, job.ID, updateErr)
 		}
 		return
 	}
 
 	// Mark job as completed
-	if err := p.manager.UpdateJobCompleted(job.ID, result); err != nil {
+	if err := p.manager.UpdateJobCompleted(job, result); err != nil {
 		log.Printf("Worker %d: failed to update job %s to completed: %v", workerID, job.ID, err)
 		return
 	}
@@ -113,7 +118,7 @@ func (p *Pool) processJob(workerID int, job *jobs.Job) {
 type DefaultJobProcessor struct{}
 
 // Process implements JobProcessor interface with some mock job processing
-func (d *DefaultJobProcessor) Process(job *jobs.Job) (string, error) {
+func (d *DefaultJobProcessor) Process(job *interfaces.Job) (string, error) {
 	switch job.Type {
 	case "echo":
 		// Simple echo job - just return the payload

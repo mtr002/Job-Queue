@@ -7,6 +7,7 @@ import (
 	"syscall"
 
 	"github.com/mtr002/Job-Queue/internal/api"
+	"github.com/mtr002/Job-Queue/internal/db"
 	"github.com/mtr002/Job-Queue/internal/jobs"
 	"github.com/mtr002/Job-Queue/internal/worker"
 )
@@ -14,15 +15,32 @@ import (
 func main() {
 	// Configuration
 	const (
-		port        = "8080"
-		workerCount = 3
-		queueSize   = 100
+		port          = "8080"
+		workerCount   = 3
+		maxRetries    = 3
+		migrationsDir = "migrations"
 	)
 
-	log.Println("Starting JobQueue server...")
+	log.Println("Starting JobQueue server with PostgreSQL persistence...")
 
-	// Create job manager
-	manager := jobs.NewManager(workerCount, queueSize)
+	// Connect to database
+	config := db.DefaultConfig()
+	database, err := db.Connect(config)
+	if err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+	defer database.Close()
+
+	// Run migrations
+	if err := db.RunMigrations(database, migrationsDir); err != nil {
+		log.Fatalf("Failed to run migrations: %v", err)
+	}
+
+	// Create database store
+	store := db.NewStore(database)
+
+	// Create job manager with database persistence
+	manager := jobs.NewManager(store, maxRetries)
 
 	// Create and start worker pool
 	processor := &worker.DefaultJobProcessor{}
@@ -44,6 +62,5 @@ func main() {
 
 	log.Println("Shutting down gracefully...")
 	workerPool.Stop()
-	manager.Close()
 	log.Println("Server stopped")
 }

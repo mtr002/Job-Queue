@@ -5,7 +5,12 @@ go_library(
     srcs = ["main.go"],
     importpath = "github.com/mtr002/Job-Queue/cmd/server",
     visibility = ["//visibility:private"],
-    deps = ["//internal/api"],
+    deps = [
+        "//internal/api",
+        "//internal/db",
+        "//internal/jobs",
+        "//internal/worker",
+    ],
 )
 
 go_binary(
