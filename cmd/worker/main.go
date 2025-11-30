@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"net"
 	"os"
 	"os/signal"
@@ -13,6 +12,8 @@ import (
 
 	"github.com/mtr002/Job-Queue/internal/db"
 	"github.com/mtr002/Job-Queue/internal/jobs"
+	"github.com/mtr002/Job-Queue/internal/logger"
+	"github.com/mtr002/Job-Queue/internal/nats"
 	"github.com/mtr002/Job-Queue/internal/worker"
 	"github.com/mtr002/Job-Queue/proto"
 )
@@ -114,17 +115,18 @@ func main() {
 		migrationsDir = "migrations"
 	)
 
-	log.Println("Starting Worker Service with gRPC...")
+	logger.Init("worker-service")
+	logger.Logger.Info().Msg("Starting Worker Service with gRPC")
 
 	config := db.DefaultConfig()
 	database, err := db.Connect(config)
 	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+		logger.Logger.Fatal().Err(err).Msg("Failed to connect to database")
 	}
 	defer database.Close()
 
 	if err := db.RunMigrations(database, migrationsDir); err != nil {
-		log.Fatalf("Failed to run migrations: %v", err)
+		logger.Logger.Fatal().Err(err).Msg("Failed to run migrations")
 	}
 
 	store := db.NewStore(database)
@@ -134,18 +136,37 @@ func main() {
 	workerPool := worker.NewPool(manager, processor, workerCount)
 	workerPool.Start()
 
+	var natsServer *nats.Server
+	useNATS := os.Getenv("USE_NATS")
+	if useNATS == "true" {
+		natsURL := os.Getenv("NATS_URL")
+		if natsURL == "" {
+			natsURL = "nats://localhost:4222"
+		}
+		server, err := nats.NewServer(natsURL, manager)
+		if err != nil {
+			logger.Logger.Fatal().Err(err).Msg("Failed to create NATS server")
+		}
+		if err := server.Subscribe(); err != nil {
+			logger.Logger.Fatal().Err(err).Msg("Failed to subscribe to NATS")
+		}
+		defer server.Close()
+		natsServer = server
+		logger.Logger.Info().Str("url", natsURL).Msg("NATS consumer started")
+	}
+
 	lis, err := net.Listen("tcp", ":"+port)
 	if err != nil {
-		log.Fatalf("Failed to listen: %v", err)
+		logger.Logger.Fatal().Err(err).Msg("Failed to listen")
 	}
 
 	s := grpc.NewServer()
 	proto.RegisterWorkerServiceServer(s, &workerServer{manager: manager})
 
 	go func() {
-		log.Printf("Worker Service gRPC server listening on :%s", port)
+		logger.Logger.Info().Str("port", port).Msg("Worker Service gRPC server listening")
 		if err := s.Serve(lis); err != nil {
-			log.Fatalf("Failed to serve: %v", err)
+			logger.Logger.Fatal().Err(err).Msg("Failed to serve")
 		}
 	}()
 
@@ -153,8 +174,11 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
 
-	log.Println("Shutting down gracefully...")
+	logger.Logger.Info().Msg("Shutting down gracefully...")
 	s.GracefulStop()
 	workerPool.Stop()
-	log.Println("Worker Service stopped")
+	if natsServer != nil {
+		natsServer.Close()
+	}
+	logger.Logger.Info().Msg("Worker Service stopped")
 }

@@ -2,11 +2,12 @@ package jobs
 
 import (
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/mtr002/Job-Queue/internal/interfaces"
+	"github.com/mtr002/Job-Queue/internal/logger"
+	"github.com/mtr002/Job-Queue/internal/metrics"
 )
 
 // Manager handles job storage and queueing with database persistence
@@ -48,7 +49,9 @@ func (m *Manager) SubmitJob(jobType, payload string) (*interfaces.Job, error) {
 		return nil, fmt.Errorf("failed to create job: %w", err)
 	}
 
-	log.Printf("Job %s submitted successfully (type: %s)", job.ID, job.Type)
+	metrics.JobsSubmittedTotal.Inc()
+	log := logger.WithJobID(job.ID)
+	log.Info().Str("type", job.Type).Msg("Job submitted successfully")
 	return job, nil
 }
 
@@ -77,7 +80,9 @@ func (m *Manager) UpdateJobCompleted(job *interfaces.Job, result string) error {
 		return fmt.Errorf("failed to update job as completed: %w", err)
 	}
 
-	log.Printf("Job %s completed successfully", job.ID)
+	metrics.JobsCompletedTotal.Inc()
+	log := logger.WithJobID(job.ID)
+	log.Info().Msg("Job completed successfully")
 	return nil
 }
 
@@ -92,14 +97,20 @@ func (m *Manager) UpdateJobFailed(job *interfaces.Job, errorMsg string) error {
 		job.Status = interfaces.StatusRetrying
 		job.SetRetryAfter(1) // 1 second base delay
 
-		log.Printf("Job %s failed (attempt %d/%d), will retry after %v",
-			job.ID, job.Attempts, job.MaxAttempts, job.RetryAfter)
+		log := logger.WithJobID(job.ID)
+		log.Info().
+			Int("attempts", job.Attempts).
+			Int("max_attempts", job.MaxAttempts).
+			Interface("retry_after", job.RetryAfter).
+			Msg("Job failed, will retry")
 	} else {
 		// Job has exceeded max retries - mark as permanently failed
 		job.Status = interfaces.StatusPermanentFailed
 		job.RetryAfter = nil
 
-		log.Printf("Job %s permanently failed after %d attempts", job.ID, job.Attempts)
+		metrics.JobsFailedTotal.Inc()
+		log := logger.WithJobID(job.ID)
+		log.Info().Int("attempts", job.Attempts).Msg("Job permanently failed")
 	}
 
 	if err := m.store.UpdateJob(job); err != nil {

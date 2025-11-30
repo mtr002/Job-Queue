@@ -42,7 +42,6 @@ func Connect(config *Config) (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// Test the connection
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
@@ -72,5 +71,3 @@ func getEnv(key, fallback string) string {
 	}
 	return fallback
 }
-
-

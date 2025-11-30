@@ -84,7 +84,7 @@ func (s *Store) UpdateJob(job *interfaces.Job) error {
 	return nil
 }
 
-// GetPendingJob retrieves the next pending job for processing using SELECT FOR UPDATE to prevent race conditions
+// GetPendingJob retrieves the next pending job for processing
 func (s *Store) GetPendingJob() (*interfaces.Job, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
