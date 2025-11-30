@@ -7,39 +7,50 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mtr002/Job-Queue/internal/grpc"
 	"github.com/mtr002/Job-Queue/internal/jobs"
+	"github.com/mtr002/Job-Queue/internal/websocket"
 )
 
-// addRoutes maps the entire API surface
 func AddRoutes(
 	mux *http.ServeMux,
 	logger *log.Logger,
 	manager *jobs.Manager,
+	grpcClient *grpc.Client,
+	hub *websocket.Hub,
 ) {
-	// Register all routes
-	mux.HandleFunc("/jobs", handleJobs(logger, manager))
+	mux.HandleFunc("/jobs", handleJobs(logger, manager, grpcClient, hub))
 	mux.HandleFunc("/jobs/", handleJobByID(logger, manager))
-
-	// Catch-all route for unmatched routes
-	mux.HandleFunc("/", http.NotFound)
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		websocket.HandleWebSocket(hub, w, r)
+	})
+	mux.HandleFunc("/", handleRoot(hub))
 }
 
-// handleJobs is a generic handler for all job-related endpoints
-func handleJobs(logger *log.Logger, manager *jobs.Manager) http.HandlerFunc {
+func handleRoot(hub *websocket.Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			http.ServeFile(w, r, "web/dashboard.html")
+			return
+		}
+		http.NotFound(w, r)
+	}
+}
+
+func handleJobs(logger *log.Logger, manager *jobs.Manager, grpcClient *grpc.Client, hub *websocket.Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger.Printf("Received request: %s %s", r.Method, r.URL.Path)
 		switch r.Method {
 		case http.MethodGet:
 			handleListJobs(w, r, logger, manager)
 		case http.MethodPost:
-			handleCreateJob(w, r, logger, manager)
+			handleCreateJob(w, r, logger, grpcClient, hub)
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	}
 }
 
-// handleJobByID is a handler for the /jobs/:id endpoint
 func handleJobByID(logger *log.Logger, manager *jobs.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -47,7 +58,6 @@ func handleJobByID(logger *log.Logger, manager *jobs.Manager) http.HandlerFunc {
 			return
 		}
 
-		// Extract job ID from URL
 		path := strings.TrimPrefix(r.URL.Path, "/jobs/")
 		if path == "" {
 			http.Error(w, "Job ID is required", http.StatusBadRequest)
@@ -58,8 +68,7 @@ func handleJobByID(logger *log.Logger, manager *jobs.Manager) http.HandlerFunc {
 	}
 }
 
-// handleCreateJob is a handler for the /jobs endpoint
-func handleCreateJob(w http.ResponseWriter, r *http.Request, logger *log.Logger, manager *jobs.Manager) {
+func handleCreateJob(w http.ResponseWriter, r *http.Request, logger *log.Logger, grpcClient *grpc.Client, hub *websocket.Hub) {
 	type JobRequest struct {
 		Type    string `json:"type"`
 		Payload string `json:"payload"`
@@ -76,7 +85,6 @@ func handleCreateJob(w http.ResponseWriter, r *http.Request, logger *log.Logger,
 		Result    string `json:"result"`
 	}
 
-	// Decode the request
 	var req JobRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -87,17 +95,17 @@ func handleCreateJob(w http.ResponseWriter, r *http.Request, logger *log.Logger,
 		return
 	}
 
-	job, err := manager.SubmitJob(req.Type, req.Payload)
+	job, err := grpcClient.SubmitJob(req.Type, req.Payload, 3)
 	if err != nil {
-		logger.Printf("Failed to submit job: %v", err)
+		logger.Printf("Failed to submit job via gRPC: %v", err)
 		http.Error(w, "Failed to submit job: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Encode response
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	if err := json.NewEncoder(w).Encode(JobResponse{
+	
+	response := JobResponse{
 		ID:        job.ID,
 		Type:      job.Type,
 		Status:    string(job.Status),
@@ -106,9 +114,14 @@ func handleCreateJob(w http.ResponseWriter, r *http.Request, logger *log.Logger,
 		UpdatedAt: job.UpdatedAt.Format(time.RFC3339),
 		Error:     job.Error,
 		Result:    job.Result,
-	}); err != nil {
-		logger.Printf("Failed to encode response: %v", err)
 	}
+	
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		logger.Printf("Failed to encode response: %v", err)
+		return
+	}
+	
+	websocket.BroadcastJobUpdate(hub, job)
 }
 
 func handleGetJob(w http.ResponseWriter, _ *http.Request, jobID string, logger *log.Logger, manager *jobs.Manager) {

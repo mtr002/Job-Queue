@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package jobqueue;
+
+option go_package = "github.com/mtr002/Job-Queue/proto";
+
+message SubmitJobRequest {
+  string type = 1;
+  string payload = 2;
+  int32 max_attempts = 3;
+}
+
+message SubmitJobResponse {
+  string job_id = 1;
+  string status = 2;
+  string created_at = 3;
+}
+
+message GetJobRequest {
+  string job_id = 1;
+}
+
+message JobStatusResponse {
+  string job_id = 1;
+  string type = 2;
+  string status = 3;
+  string payload = 4;
+  string result = 5;
+  string error = 6;
+  int32 attempts = 7;
+  int32 max_attempts = 8;
+  string created_at = 9;
+  string updated_at = 10;
+}
+
+message ProcessJobRequest {
+  string job_id = 1;
+}
+
+message ProcessJobResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+service WorkerService {
+  rpc SubmitJob(SubmitJobRequest) returns (SubmitJobResponse);
+  rpc GetJobStatus(GetJobRequest) returns (JobStatusResponse);
+  rpc NotifyJobCompleted(ProcessJobRequest) returns (ProcessJobResponse);
+  rpc NotifyJobFailed(ProcessJobRequest) returns (ProcessJobResponse);
+}
+

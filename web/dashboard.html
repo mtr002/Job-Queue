@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Job Queue</title>
+    <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Google Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #202124;
+            color: #e8eaed;
+            line-height: 1.5;
+        }
+
+        .header {
+            background: #303134;
+            border-bottom: 1px solid #5f6368;
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header h1 {
+            font-size: 22px;
+            font-weight: 400;
+            color: #4285f4;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            border-radius: 16px;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .status-badge.connected {
+            background: #137333;
+            color: #e8f5e9;
+        }
+
+        .status-badge.disconnected {
+            background: #c5221f;
+            color: #fce8e6;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 360px 1fr;
+            gap: 24px;
+        }
+
+        .card {
+            background: #303134;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px 0 rgba(0,0,0,.3), 0 4px 8px 3px rgba(0,0,0,.15);
+            overflow: hidden;
+            border: 1px solid #5f6368;
+        }
+
+        .card-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid #5f6368;
+        }
+
+        .card-title {
+            font-size: 16px;
+            font-weight: 500;
+            color: #e8eaed;
+        }
+
+        .card-content {
+            padding: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        .form-group:last-child {
+            margin-bottom: 0;
+        }
+
+        label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            color: #9aa0a6;
+            margin-bottom: 8px;
+        }
+
+        select, input {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #5f6368;
+            border-radius: 4px;
+            font-size: 14px;
+            font-family: 'Google Sans', sans-serif;
+            background: #202124;
+            color: #e8eaed;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        select:focus, input:focus {
+            outline: none;
+            border-color: #4285f4;
+            box-shadow: 0 0 0 2px rgba(66,133,244,.2);
+        }
+
+        button {
+            width: 100%;
+            padding: 10px 24px;
+            background: #4285f4;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 500;
+            font-family: 'Google Sans', sans-serif;
+            cursor: pointer;
+            transition: background 0.2s, box-shadow 0.2s;
+        }
+
+        button:hover {
+            background: #1a73e8;
+            box-shadow: 0 1px 3px 0 rgba(0,0,0,.3), 0 4px 8px 3px rgba(0,0,0,.15);
+        }
+
+        button:active {
+            background: #1557b0;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .stat {
+            background: #303134;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px 0 rgba(0,0,0,.3), 0 4px 8px 3px rgba(0,0,0,.15);
+            border: 1px solid #5f6368;
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: 400;
+            color: #e8eaed;
+            line-height: 1;
+            margin-bottom: 4px;
+        }
+
+        .stat-label {
+            font-size: 13px;
+            color: #9aa0a6;
+            font-weight: 500;
+        }
+
+        .jobs-container {
+            max-height: calc(100vh - 300px);
+            overflow-y: auto;
+        }
+
+        .jobs-container::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .jobs-container::-webkit-scrollbar-track {
+            background: #202124;
+        }
+
+        .jobs-container::-webkit-scrollbar-thumb {
+            background: #5f6368;
+            border-radius: 4px;
+        }
+
+        .job-item {
+            padding: 16px 20px;
+            border-bottom: 1px solid #5f6368;
+            transition: background 0.2s;
+        }
+
+        .job-item:last-child {
+            border-bottom: none;
+        }
+
+        .job-item:hover {
+            background: #3c4043;
+        }
+
+        .job-item.new {
+            background: #1e3a2e;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-8px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .job-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+
+        .job-type {
+            font-size: 14px;
+            font-weight: 500;
+            color: #e8eaed;
+        }
+
+        .job-status {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .job-status.pending {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .job-status.processing {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .job-status.completed {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .job-status.retrying {
+            background: #fde68a;
+            color: #78350f;
+        }
+
+        .job-status.permanent_failed {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .job-info {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .job-info-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 13px;
+        }
+
+        .job-info-label {
+            color: #9aa0a6;
+            font-weight: 500;
+            min-width: 70px;
+        }
+
+        .job-info-value {
+            color: #e8eaed;
+            font-family: 'Roboto Mono', monospace;
+        }
+
+        .job-id-value {
+            color: #4285f4;
+            font-family: 'Roboto Mono', monospace;
+            font-weight: 500;
+        }
+
+        .job-result {
+            margin-top: 12px;
+            padding: 8px 12px;
+            background: #1e3a2e;
+            border-left: 3px solid #34a853;
+            border-radius: 4px;
+            font-size: 13px;
+            font-family: 'Roboto Mono', monospace;
+            color: #81c995;
+        }
+
+        .job-error {
+            margin-top: 12px;
+            padding: 8px 12px;
+            background: #3c1e1e;
+            border-left: 3px solid #ea4335;
+            border-radius: 4px;
+            font-size: 13px;
+            font-family: 'Roboto Mono', monospace;
+            color: #f28b82;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #9aa0a6;
+        }
+
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        .empty-state-text {
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Job Queue</h1>
+        <div class="status-badge disconnected" id="connectionStatus">
+            <span class="status-dot"></span>
+            <span>Disconnected</span>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="stats">
+            <div class="stat">
+                <div class="stat-value" id="statTotal">0</div>
+                <div class="stat-label">Total</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value" id="statPending">0</div>
+                <div class="stat-label">Pending</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value" id="statProcessing">0</div>
+                <div class="stat-label">Processing</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value" id="statCompleted">0</div>
+                <div class="stat-label">Completed</div>
+            </div>
+        </div>
+
+        <div class="grid">
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">New Job</div>
+                </div>
+                <div class="card-content">
+                    <form id="jobForm">
+                        <div class="form-group">
+                            <label>Type</label>
+                            <select id="jobType" required>
+                                <option value="echo">Echo</option>
+                                <option value="uppercase">Uppercase</option>
+                                <option value="slow">Slow</option>
+                                <option value="fail">Fail</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Payload</label>
+                            <input type="text" id="jobPayload" placeholder="Enter payload" required>
+                        </div>
+                        <button type="submit">Submit</button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">Jobs</div>
+                </div>
+                <div class="jobs-container" id="jobsList">
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📋</div>
+                        <div class="empty-state-text">No jobs yet</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const jobs = new Map();
+        let ws = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws`;
+            
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                updateConnectionStatus(true);
+                reconnectAttempts = 0;
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const message = JSON.parse(event.data);
+                    if (message.type === 'job_update') {
+                        updateJob(message.data);
+                    }
+                } catch (e) {
+                    console.error('Error parsing message:', e);
+                }
+            };
+
+            ws.onclose = () => {
+                updateConnectionStatus(false);
+                if (reconnectAttempts < maxReconnectAttempts) {
+                    reconnectAttempts++;
+                    setTimeout(connectWebSocket, 2000 * reconnectAttempts);
+                }
+            };
+
+            ws.onerror = () => {
+                updateConnectionStatus(false);
+            };
+        }
+
+        function updateConnectionStatus(connected) {
+            const statusEl = document.getElementById('connectionStatus');
+            if (connected) {
+                statusEl.className = 'status-badge connected';
+                statusEl.innerHTML = '<span class="status-dot"></span><span>Connected</span>';
+            } else {
+                statusEl.className = 'status-badge disconnected';
+                statusEl.innerHTML = '<span class="status-dot"></span><span>Disconnected</span>';
+            }
+        }
+
+        function updateJob(jobData) {
+            const wasNew = !jobs.has(jobData.id);
+            jobs.set(jobData.id, jobData);
+            renderJobs(wasNew ? jobData.id : null);
+            updateStats();
+        }
+
+        function renderJobs(newJobId = null) {
+            const jobsList = document.getElementById('jobsList');
+            
+            if (jobs.size === 0) {
+                jobsList.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📋</div>
+                        <div class="empty-state-text">No jobs yet</div>
+                    </div>
+                `;
+                return;
+            }
+
+            const sortedJobs = Array.from(jobs.values()).sort((a, b) => {
+                return new Date(b.created_at) - new Date(a.created_at);
+            });
+
+            jobsList.innerHTML = sortedJobs.map(job => {
+                const statusClass = job.status.toLowerCase().replace('_', '-');
+                const date = new Date(job.created_at).toLocaleString('en-US', {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: 'numeric',
+                    minute: '2-digit',
+                    hour12: true
+                });
+                const isNew = newJobId === job.id;
+                
+                return `
+                    <div class="job-item ${isNew ? 'new' : ''}" data-job-id="${job.id}">
+                        <div class="job-header">
+                            <div class="job-type">${job.type}</div>
+                            <span class="job-status ${statusClass}">${job.status}</span>
+                        </div>
+                        <div class="job-info">
+                            <div class="job-info-row">
+                                <span class="job-info-label">ID:</span>
+                                <span class="job-info-value job-id-value">${job.id.substring(0, 8)}</span>
+                            </div>
+                            <div class="job-info-row">
+                                <span class="job-info-label">Payload:</span>
+                                <span class="job-info-value">${job.payload}</span>
+                            </div>
+                            <div class="job-info-row">
+                                <span class="job-info-label">Attempts:</span>
+                                <span class="job-info-value">${job.attempts}/${job.max_attempts}</span>
+                            </div>
+                            <div class="job-info-row">
+                                <span class="job-info-label">Created:</span>
+                                <span class="job-info-value">${date}</span>
+                            </div>
+                        </div>
+                        ${job.result ? `<div class="job-result">Result: ${job.result}</div>` : ''}
+                        ${job.error ? `<div class="job-error">Error: ${job.error}</div>` : ''}
+                    </div>
+                `;
+            }).join('');
+
+            if (newJobId) {
+                setTimeout(() => {
+                    const newJobEl = document.querySelector(`[data-job-id="${newJobId}"]`);
+                    if (newJobEl) {
+                        newJobEl.classList.remove('new');
+                    }
+                }, 300);
+            }
+        }
+
+        function updateStats() {
+            const stats = {
+                total: jobs.size,
+                pending: 0,
+                processing: 0,
+                completed: 0
+            };
+
+            jobs.forEach(job => {
+                if (job.status === 'pending') stats.pending++;
+                else if (job.status === 'processing') stats.processing++;
+                else if (job.status === 'completed') stats.completed++;
+            });
+
+            document.getElementById('statTotal').textContent = stats.total;
+            document.getElementById('statPending').textContent = stats.pending;
+            document.getElementById('statProcessing').textContent = stats.processing;
+            document.getElementById('statCompleted').textContent = stats.completed;
+        }
+
+        document.getElementById('jobForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const type = document.getElementById('jobType').value;
+            const payload = document.getElementById('jobPayload').value;
+
+            try {
+                const response = await fetch('/jobs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ type, payload }),
+                });
+
+                if (response.ok) {
+                    const job = await response.json();
+                    updateJob(job);
+                    document.getElementById('jobPayload').value = '';
+                }
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        });
+
+        async function loadInitialJobs() {
+            try {
+                const response = await fetch('/jobs');
+                if (response.ok) {
+                    const data = await response.json();
+                    data.jobs.forEach(job => jobs.set(job.id, job));
+                    renderJobs();
+                    updateStats();
+                }
+            } catch (error) {
+                console.error('Error loading jobs:', error);
+            }
+        }
+
+        connectWebSocket();
+        loadInitialJobs();
+        setInterval(loadInitialJobs, 5000);
+    </script>
+</body>
+</html>

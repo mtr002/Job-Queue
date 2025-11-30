@@ -6,37 +6,37 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/mtr002/Job-Queue/internal/grpc"
 	"github.com/mtr002/Job-Queue/internal/jobs"
+	"github.com/mtr002/Job-Queue/internal/websocket"
 )
 
-// NewServer creates a new API server (following Mat Ryer's pattern)
-func NewServer(manager *jobs.Manager, port string) *Server {
+func NewServer(manager *jobs.Manager, grpcClient *grpc.Client, hub *websocket.Hub, port string) *Server {
 	logger := log.New(log.Writer(), "[API] ", log.LstdFlags)
 
 	return &Server{
-		manager: manager,
-		port:    port,
-		logger:  logger,
+		manager:    manager,
+		grpcClient: grpcClient,
+		hub:        hub,
+		port:       port,
+		logger:     logger,
 	}
 }
 
-// Server represents the HTTP server with job management capabilities
 type Server struct {
-	manager *jobs.Manager
-	logger  *log.Logger
-	port    string
+	manager    *jobs.Manager
+	grpcClient *grpc.Client
+	hub        *websocket.Hub
+	logger     *log.Logger
+	port       string
 }
 
-// Start starts the HTTP server
 func (s *Server) Start() {
 	addr := fmt.Sprintf(":%s", s.port)
 	s.logger.Printf("Starting server on %s", addr)
 
-	// Create a new ServeMux
 	mux := http.NewServeMux()
-
-	// Add routes (since addRoutes is in the same package, we can call it directly)
-	AddRoutes(mux, s.logger, s.manager)
+	AddRoutes(mux, s.logger, s.manager, s.grpcClient, s.hub)
 
 	server := &http.Server{
 		Addr:         addr,
