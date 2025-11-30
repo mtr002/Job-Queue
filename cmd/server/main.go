@@ -5,11 +5,13 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/mtr002/Job-Queue/internal/api"
 	"github.com/mtr002/Job-Queue/internal/db"
 	"github.com/mtr002/Job-Queue/internal/grpc"
 	"github.com/mtr002/Job-Queue/internal/jobs"
+	"github.com/mtr002/Job-Queue/internal/websocket"
 )
 
 func main() {
@@ -19,7 +21,7 @@ func main() {
 		migrationsDir = "migrations"
 	)
 
-	log.Println("Starting API Service with gRPC...")
+	log.Println("Starting API Service with gRPC and WebSocket...")
 
 	config := db.DefaultConfig()
 	database, err := db.Connect(config)
@@ -41,7 +43,12 @@ func main() {
 	}
 	defer grpcClient.Close()
 
-	server := api.NewServer(manager, grpcClient, port)
+	hub := websocket.NewHub()
+	go hub.Run()
+
+	go startJobPoller(manager, hub)
+
+	server := api.NewServer(manager, grpcClient, hub, port)
 
 	go func() {
 		server.Start()
@@ -53,4 +60,26 @@ func main() {
 
 	log.Println("Shutting down gracefully...")
 	log.Println("API Service stopped")
+}
+
+func startJobPoller(manager *jobs.Manager, hub *websocket.Hub) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	lastJobs := make(map[string]string)
+
+	for range ticker.C {
+		jobs, err := manager.GetAllJobs()
+		if err != nil {
+			continue
+		}
+
+		for _, job := range jobs {
+			lastStatus, exists := lastJobs[job.ID]
+			if !exists || lastStatus != string(job.Status) {
+				websocket.BroadcastJobUpdate(hub, job)
+				lastJobs[job.ID] = string(job.Status)
+			}
+		}
+	}
 }
