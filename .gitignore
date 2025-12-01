@@ -5,6 +5,8 @@
 *.so
 *.dylib
 bin/
+server
+worker
 
 *.test
 

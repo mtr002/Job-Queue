@@ -1,7 +1,6 @@
 package main
 
 import (
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -10,7 +9,11 @@ import (
 	"github.com/mtr002/Job-Queue/internal/api"
 	"github.com/mtr002/Job-Queue/internal/db"
 	"github.com/mtr002/Job-Queue/internal/grpc"
+	"github.com/mtr002/Job-Queue/internal/interfaces"
 	"github.com/mtr002/Job-Queue/internal/jobs"
+	"github.com/mtr002/Job-Queue/internal/logger"
+	"github.com/mtr002/Job-Queue/internal/metrics"
+	"github.com/mtr002/Job-Queue/internal/nats"
 	"github.com/mtr002/Job-Queue/internal/websocket"
 )
 
@@ -21,34 +24,55 @@ func main() {
 		migrationsDir = "migrations"
 	)
 
-	log.Println("Starting API Service with gRPC and WebSocket...")
+	logger.Init("api-service")
+	logger.Logger.Info().Msg("Starting API Service with gRPC and WebSocket")
 
 	config := db.DefaultConfig()
 	database, err := db.Connect(config)
 	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+		logger.Logger.Fatal().Err(err).Msg("Failed to connect to database")
 	}
 	defer database.Close()
 
 	if err := db.RunMigrations(database, migrationsDir); err != nil {
-		log.Fatalf("Failed to run migrations: %v", err)
+		logger.Logger.Fatal().Err(err).Msg("Failed to run migrations")
 	}
 
 	store := db.NewStore(database)
 	manager := jobs.NewManager(store, 3)
 
-	grpcClient, err := grpc.NewClient(workerAddr)
-	if err != nil {
-		log.Fatalf("Failed to connect to Worker Service: %v", err)
+	var grpcClient *grpc.Client
+	var natsClient *nats.Client
+
+	useNATS := os.Getenv("USE_NATS")
+	if useNATS == "true" {
+		natsURL := os.Getenv("NATS_URL")
+		if natsURL == "" {
+			natsURL = "nats://localhost:4222"
+		}
+		client, err := nats.NewClient(natsURL)
+		if err != nil {
+			logger.Logger.Fatal().Err(err).Msg("Failed to connect to NATS")
+		}
+		defer client.Close()
+		natsClient = client
+		logger.Logger.Info().Str("url", natsURL).Msg("Using NATS for job submission")
+	} else {
+		client, err := grpc.NewClient(workerAddr)
+		if err != nil {
+			logger.Logger.Fatal().Err(err).Msg("Failed to connect to Worker Service")
+		}
+		defer client.Close()
+		grpcClient = client
+		logger.Logger.Info().Str("addr", workerAddr).Msg("Using gRPC for job submission")
 	}
-	defer grpcClient.Close()
 
 	hub := websocket.NewHub()
 	go hub.Run()
 
 	go startJobPoller(manager, hub)
 
-	server := api.NewServer(manager, grpcClient, hub, port)
+	server := api.NewServer(manager, grpcClient, natsClient, hub, port, database)
 
 	go func() {
 		server.Start()
@@ -58,8 +82,8 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
 
-	log.Println("Shutting down gracefully...")
-	log.Println("API Service stopped")
+	logger.Logger.Info().Msg("Shutting down gracefully...")
+	logger.Logger.Info().Msg("API Service stopped")
 }
 
 func startJobPoller(manager *jobs.Manager, hub *websocket.Hub) {
@@ -69,17 +93,24 @@ func startJobPoller(manager *jobs.Manager, hub *websocket.Hub) {
 	lastJobs := make(map[string]string)
 
 	for range ticker.C {
-		jobs, err := manager.GetAllJobs()
+		allJobs, err := manager.GetAllJobs()
 		if err != nil {
 			continue
 		}
 
-		for _, job := range jobs {
+		pendingCount := 0
+		for _, job := range allJobs {
+			if job.Status == interfaces.StatusPending || job.Status == interfaces.StatusRetrying {
+				pendingCount++
+			}
+
 			lastStatus, exists := lastJobs[job.ID]
 			if !exists || lastStatus != string(job.Status) {
 				websocket.BroadcastJobUpdate(hub, job)
 				lastJobs[job.ID] = string(job.Status)
 			}
 		}
+
+		metrics.PendingJobs.Set(float64(pendingCount))
 	}
 }
